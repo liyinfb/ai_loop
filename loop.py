@@ -55,7 +55,7 @@ This is the complete Loop Engineering framework specification.
         Generates work from findings, writes to isolated worktrees.
         - create_worktree(name) -> path
         - generate(finding, template) -> draft text
-        - check_stop_condition() -> bool (V4: supports run:cmd in goal)
+        - check_stop_condition() -> bool (supports run:cmd in goal)
         - track_cost(cost), reset_budget()
 
     BudgetGate
