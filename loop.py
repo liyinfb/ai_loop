@@ -72,30 +72,21 @@ This is the complete Loop Engineering framework specification.
         4. Persistence  -> Memory.archive_finding() (+ goal stop condition)
         5. Scheduling   -> Timer / cron trigger (+ _scheduler() loop)
 
-## V3 vs V4 Differences
-    Feature           | V3            | V4
-    -------           | ---           | ----
-    add_rule args     | TWO (draft, wt)  | THREE (finding, draft, wt)
-    Connector/MCP     | NO            | YES (Connector ABC + GitHubConnector)
-    Evaluator.execute | NO            | YES (set executor first)
-    /goal stop condn. | NO            | YES (run:cmd support)
-    skill discovery   | NO            | YES
-    complexity        | Minimal       | Full spec
 
 ## Usage - Minimal
-    from loop_v4 import LoopOrchestrator, Memory, GeneratorAgent, EvaluatorAgent, BudgetGate, Finding, Status
+    from loop import LoopOrchestrator, Memory, GeneratorAgent, EvaluatorAgent, BudgetGate, Finding, Status
 
     memory = Memory()
     generator = GeneratorAgent()
     evaluator = EvaluatorAgent()
-    evaluator.add_rule("has_heading", lambda finding, draft, wt: {"passed": "# " in draft, "detail": "ok"})
+    evaluator.add_rule("has_heading", lambda f, d, w: {"passed": "# " in d, "detail": "ok"})
     budget = BudgetGate(per_run=10.0, per_turn=0.5, daily=100.0)
 
     orchestrator = LoopOrchestrator(memory, generator, evaluator, budget)
     orchestrator.run_turn("Default template")
 
-## Usage - With Findings
-    from loop_v4 import *
+## Usage - Basic Loop with Findings
+    from loop import *
 
     memory = Memory()
     memory.save_finding(Finding(id="t1", text="Fix login bug", status=Status.PENDING))
@@ -103,8 +94,8 @@ This is the complete Loop Engineering framework specification.
 
     generator = GeneratorAgent()
     evaluator = EvaluatorAgent()
-    evaluator.add_rule("structure", lambda f, draft, wt: {"passed": "# " in draft, "detail": "ok"})
-    evaluator.add_rule("content", lambda f, draft, wt: {"passed": len(draft) > 100, "detail": "ok"})
+    evaluator.add_rule("structure", lambda f, d, w: {"passed": "# " in d, "detail": "ok"})
+    evaluator.add_rule("content", lambda f, d, w: {"passed": len(d) > 50, "detail": "ok"})
     budget = BudgetGate(per_run=10.0, per_turn=0.5, daily=100.0)
 
     orchestrator = LoopOrchestrator(memory, generator, evaluator, budget)
@@ -112,15 +103,15 @@ This is the complete Loop Engineering framework specification.
         if not orchestrator.run_turn("Your template text here."):
             break
 
-## Usage - With Connectors (V4-only)
-    from loop_v4 import *
+## Usage - With Connectors
+    from loop import *
 
     memory = Memory()
     memory.save_finding(Finding(id="t1", text="Fix login bug", status=Status.PENDING))
 
     connector = GitHubConnector(repo="myorg/myrepo", branch="main")
-    # TODO: Implement connector.fetch() and .submit() with real API calls
-    # connector.fetch() returns List[Finding] from GitHub PRs/issues
+    # connector.fetch() returns List[Finding] from the external system
+    # connector.submit(finding) sends results back
 
     generator = GeneratorAgent()
     evaluator = EvaluatorAgent()
@@ -130,17 +121,16 @@ This is the complete Loop Engineering framework specification.
     orchestrator.run_turn("Default template")
     # connector data will be merged into findings during discovery
 
-## Usage - Evaluator.execute() (V4-only, requires setup)
-    from loop_v4 import *
+## Usage - Evaluator.execute()
+    from loop import *
 
-    evalu = EvaluatorAgent()
-    # IMPORTANT: executor must be set before calling execute()
-    evalu.executor = lambda cmd: subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    results = evalu.execute(["pytest tests/"], "/path/to/worktree")
+    evaluator = EvaluatorAgent()
+    evaluator.executor = lambda cmd: subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    results = evaluator.execute(["pytest tests/"], "/path/to/worktree")
     # results: [{"returncode": 0, "stdout": "...", "stderr": "..."}]
 
-## Usage - Smart /goal Stop Condition (V4-only)
-    from loop_v4 import *
+## Usage - Smart /goal Stop Condition
+    from loop import *
 
     generator = GeneratorAgent()
     generator.goal = {
@@ -151,19 +141,19 @@ This is the complete Loop Engineering framework specification.
     }
     # check_stop_condition() runs the cmd and returns True (stop) if returncode != 0
 
-## Usage - Advanced - Budget Guarding
+## Usage - Budget Guarding
     budget = BudgetGate(per_run=50.0, per_turn=2.0, daily=200.0)
     # If the generator goes over budget, the loop automatically stops
     # at the next gate. No manual intervention needed.
 
 ## Pitfalls
-    - add_rule signature: V3 uses TWO args (draft, worktree). V4 uses THREE (finding, draft, worktree).
+    - add_rule() signature: args are (finding, draft_code, worktree) — returning {"passed": bool, "detail": str}.
     - Evaluator has_structure() requires "# " (Markdown heading) in the draft.
-    - Evaluator.execute() is DISABLED by default (executor=None). Must set evaluator.executor = callable first!
+    - Evaluator.execute() is DISABLED by default (executor=None). Set evaluator.executor = callable first!
     - Connectors must be passed to memory.load_findings(connectors=[...]) — not auto-registered.
-    - Smart /goal stop condition executes run:cmd via subprocess. Goal dict format:
-      {"text": "...", "rules": [{"type": "run:cmd", "cmd": "pytest"}]}
-    - BudgetGates are independent -- all three must pass, not just one.
+    - Smart /goal stop condition runs `run:cmd` rules via subprocess. Goal dict format:
+      `{"text": "...", "rules": [{"type": "run:cmd", "cmd": "pytest"}]}`
+    - BudgetGates are independent — all three must pass, not just one.
     - Human gates only affect NEEDS_REVIEW findings, not REJECT findings.
 
 ## Key Quote

@@ -136,8 +136,7 @@ def test_memory_load_findings_pending():
     mem.save_finding(_make_finding(status=Status.PENDING))
     mem.save_finding(_make_finding(status=Status.APPROVE))
     pending = mem.load_findings()
-    # In V3, load_findings checks _findings list; both are in there
-    # In V4, it checks _findings and filters by Status.PENDING
+    # In the current version, load_findings checks _findings and filters by Status.PENDING
     pending_statuses = [f.status for f in pending]
     # The approved one should not be in pending
     assert Status.APPROVE not in pending_statuses
