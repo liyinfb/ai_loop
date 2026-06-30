@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-test_loop_v4.py — 24 test functions for loop_v4.py
-==============================
+test_loop.py - 24 test functions for loop.py
 
 Tests cover:
   - Finding dataclass (serialize/round-trip)
@@ -26,8 +25,8 @@ from unittest.mock import patch, MagicMock
 # Always import from the loop folder
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from loop_v4 import (
-    Finding, Status, Memory, Memory, GeneratorAgent, EvaluatorAgent,
+from loop import (
+    Finding, Status, Memory, GeneratorAgent, EvaluatorAgent,
     BudgetGate, LoopOrchestrator, Connector, GitHubConnector,
     DEFAULT_STATE_DIR, DEFAULT_WORKTREES, DEFAULT_INBOX,
 )
