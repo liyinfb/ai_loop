@@ -52,6 +52,8 @@ One call, five moves. The loop runs until there is no work left.
 
 ## Quickstart
 
+### CLI — 默认启动
+
 ```bash
 cd ~/hermes/loop
 python -m loop --run 3                # Run 3 turns from disk findings
@@ -59,14 +61,35 @@ python -m loop --run 3 --budget 50:2:200  # Set budget gates (per_run:per_turn:d
 python -m loop --run 3 --worktrees /tmp/loop-wtrees --state /tmp/loop-state
 ```
 
-### Natural language input
+### CLI — 自然语言输入开启任务
 
-Give `TaskPlannerAgent` a plain-English goal — it auto-generates findings + template:
+把一段自然语言目标传给 `--goal`，`TaskPlannerAgent` 自动拆成多个 finding 并设定 domain：
+
+```bash
+python -m loop \
+  --run 5 \
+  --goal "Add a REST API for user management with Flask.\
+Need login, registration, and database models."
+```
+
+输出：
+
+```
+Findings auto-generated: 3
+  task-a-1: Add a REST API for user management with Flask. Need login
+  task-a-2: and database models.
+  task-a-3: registration
+Domain: api
+Template populated with api-specific requirements.
+```
+
+### Python — 自然语言输入
 
 ```python
 from loop import (
     LoopOrchestrator, Memory, GeneratorAgent,
     EvaluatorAgent, BudgetGate, TaskPlannerAgent,
+    Finding, Status,
 )
 
 planner = TaskPlannerAgent()
@@ -76,8 +99,9 @@ findings, template = planner.parse(
     goal_text="Add a REST API for user management with Flask.\n"
               "Need login, registration, and database models."
 )
-# → findings auto-generated (e.g. [task-a-1: Add login endpoint, ...])
-# → template filled with domain-specific requirements for "api"
+
+# findings auto-generated (e.g. task-a-1: "Add login endpoint", ...)
+# template is pre-filled with api-domain requirements
 
 memory = Memory()
 for f in findings:

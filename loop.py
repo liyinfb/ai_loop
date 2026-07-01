@@ -936,6 +936,7 @@ def main():
     parser.add_argument("--worktrees", default=DEFAULT_WORKTREES)
     parser.add_argument("--state", default=DEFAULT_STATE_DIR)
     parser.add_argument("--budget", default="10.0:0.5:100.0", help="per_run:per_turn:daily budget")
+    parser.add_argument("--goal", type=str, help="Natural language goal (auto-generates tasks)")
     args = parser.parse_args()
 
     per_run, per_turn, daily = (float(x) for x in args.budget.split(":"))
@@ -945,9 +946,13 @@ def main():
     evaluator = EvaluatorAgent()
     budget = BudgetGate(per_run, per_turn, daily)
 
-    orchestrator = LoopOrchestrator(memory, generator, evaluator, budget)
-
     template = "Default template placeholder."
+    if args.goal:
+        findings, template = TaskPlannerAgent().parse(goal_text=args.goal)
+        for finding in findings:
+            memory.save_finding(finding)
+
+    orchestrator = LoopOrchestrator(memory, generator, evaluator, budget)
     for _ in range(args.run):
         if not orchestrator.run_turn(template):
             break
