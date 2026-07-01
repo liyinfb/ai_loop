@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Loop Engineering Framework V4
+Loop Engineering Framework
 ================================
 Version: 4.0.0
 Author: Hermes Agent (Peter Steinberger, Boris Cherny, Addy Osmani methodology)
@@ -31,12 +31,12 @@ This is the complete Loop Engineering framework specification.
         and inbox/archive separation.
         - save_finding(), load_finding(), update_finding()
         - save_state(), load_state()
-        - load_findings(connectors=None) -- connectors augmented in V4
+        - load_findings(connectors=None) -- connectors can be passed to augment findings
         - archive_finding(), clear()
         - get_all_findings()
 
     Connector (ABC)
-        MCP/external system abstraction layer (V4 addition).
+        MCP/external system abstraction layer.
         - fetch() -> List[Finding]
         - submit(finding: Finding) -> None
         - GitHubConnector(repo, branch) -- concrete implementation stub
@@ -146,6 +146,32 @@ This is the complete Loop Engineering framework specification.
     # If the generator goes over budget, the loop automatically stops
     # at the next gate. No manual intervention needed.
 
+## Usage - TaskPlannerAgent (natural language → auto-generated tasks)
+    from loop import LoopOrchestrator, Memory, GeneratorAgent, EvaluatorAgent
+    from loop import BudgetGate, TaskPlannerAgent
+
+    memory = Memory()
+    generator = GeneratorAgent()
+    evaluator = EvaluatorAgent()
+    evaluator.add_rule("has_heading", lambda f, d, w: {"passed": "# " in d, "detail": "ok"})
+    budget = BudgetGate(per_run=10.0, per_turn=0.5, daily=100.0)
+
+    planner = TaskPlannerAgent()
+    # Accepts natural language — auto-generates findings + template
+    findings, template = planner.parse(
+        memory,
+        "Build a REST API for user management with Flask. "
+        "Need routes for CRUD, SQLite storage, and unit tests.",
+        max_tasks=5,
+    )
+    # → findings saved to memory, template ready to use
+
+    orchestrator = LoopOrchestrator(memory, generator, evaluator, budget)
+    # Now run with auto-generated template
+    for _ in range(5):
+        if not orchestrator.run_turn(template):
+            break
+
 ## Pitfalls
     - add_rule() signature: args are (finding, draft_code, worktree) — returning {"passed": bool, "detail": str}.
     - Evaluator has_structure() requires "# " (Markdown heading) in the draft.
@@ -173,13 +199,14 @@ import os
 import shutil
 import subprocess
 import sys
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Any
+from typing import Callable, Dict, List, Optional, Any, Tuple
 
 # -------------- Paths --------------
 
@@ -492,6 +519,270 @@ class BudgetGate:
         return True
 
 
+# -------------- TaskPlannerAgent (natural language → findings + template) ----- ----- -----
+
+
+class TaskPlannerAgent:
+    """
+    Analyzes a natural-language goal and auto-generates findings + a template.
+    No LLM required — uses deterministic heuristics based on punctuation and domain keywords.
+    Supports optional LLM-based parsing when a generator callable is provided.
+    """
+
+    # High-level action keywords that hint at the kind of work to create
+    ACTION_KEYWORDS = [
+        "create", "add", "build", "implement", "write", "design", "setup",
+        "fix", "debug", "resolve", "patch", "update", "migrate", "refactor",
+        "test", "docs", "document", "deploy", "configure", "secure", "optimize",
+    ]
+
+    DOMAIN_KEYWORDS = [
+        "api", "database", "frontend", "backend", "auth", "login", "register",
+        "payment", "deploy", "docker", "kubernetes", "aws", "gcp", "azure",
+        "sql", "cache", "redis", "mongodb", "rest", "graphql", "websocket",
+        "unit test", "integration test", "documentation", "ci/cd", "logging",
+        "monitoring", "security", "performance", "error handling",
+    ]
+
+    PRIORITY_KEYWORDS = [
+        "critical", "urgent", "important", "priority", "must", "should", "nice",
+        "blocker", "high", "medium", "low",
+    ]
+
+    def _detect_domain(self, text: str) -> str:
+        """Detect the primary domain from keywords in the input."""
+        lower = text.lower()
+        for domain in self.DOMAIN_KEYWORDS:
+            if domain in lower:
+                return domain
+        return "general"
+
+    def _detect_priority(self, text: str) -> int:
+        """
+        Infer priority 1-5 from text.
+        5 = critical, 4 = high, 3 = medium, 2 = low, 1 = trivial
+        """
+        lower = text.lower()
+        for kw, score in [
+            ("critical", 5), ("urgent", 5), ("blocker", 5),
+            ("priority", 4), ("must", 4), ("high", 4),
+            ("important", 3), ("medium", 3),
+            ("should", 2), ("nice", 2), ("low", 2),
+        ]:
+            if kw in lower:
+                return score
+        return 3  # default to medium
+
+    def _extract_action_items(self, text: str, max_tasks: int = 5) -> List[str]:
+        """
+        Heuristic extraction: split by common delimiters and filter for actionable items.
+        Prioritizes items beginning with action keywords.
+        """
+        # Normalize delimiters: bullet points, numbered lists, newlines, commas, semicolons
+        for delim in ["\n- ", "\n• ", "\n* ", "\n1.", "\n2.", "\n3.", "\n4.", "\n5.",
+                       "\n\n", "\n", ", ", ";\n", ";\n\n"]:
+            text = text.replace(delim, "\n")
+
+        # Split and strip
+        raw_items = [s.strip() for s in text.split("\n") if s.strip()]
+
+        # Score items: items starting with action keywords get higher scores
+        scored = []
+        for item in raw_items:
+            lower = item.lower()
+            score = 0
+            # Items starting with action keywords get bonus
+            first_word = lower.split()[0] if lower.split() else ""
+            clean_first = first_word.rstrip(".,:;!?:()[]")
+            if clean_first in self.ACTION_KEYWORDS:
+                score += 5
+            # Count domain keywords
+            for dk in self.DOMAIN_KEYWORDS:
+                if dk in lower:
+                    score += 2
+            # Priority keywords add more
+            for pk in self.PRIORITY_KEYWORDS:
+                if pk in lower:
+                    score += 3
+            # Longer items tend to be more substantive
+            score += min(len(item) // 30, 3)
+            scored.append((score, item))
+
+        # Sort by score descending, take top max_tasks
+        scored.sort(key=lambda x: x[0], reverse=True)
+        items = [item for _, item in scored[:max_tasks]]
+
+        # Also do a fallback: if no high-score items found, try sentence-level split
+        if not items:
+            # Try splitting by ".!?" followed by space
+            
+            sentences = _re.split(r'(?<=[.!?])\s+', text)
+            items = [s.strip() for s in sentences if len(s.strip()) > 20 and s.strip()[0].isupper()]
+            items = items[:max_tasks]
+
+        return items or [text.strip()]  # guarantee at least one
+
+    def _generate_template(self, domain: str, items: List[str]) -> str:
+        """
+        Generate a structured template string that the GeneratorAgent will use
+        to produce output for each finding.
+        """
+        lines = [
+            f"# Task: {{finding_id}}\n",
+            f"## Domain: {domain}",
+            "## Task Description",
+            "{{finding_text}}.",
+            "## Requirements",
+            "- Follow PEP8 style guidelines",
+            "- Add type hints where applicable",
+            "- Include docstrings for all public functions/classes",
+            "- Write docstrings for all public classes, methods, and functions",
+            "## Output Format",
+            "- Produce a structured Markdown document with `## ` subheadings",
+            "- Include a `## Checklist` section at the end",
+        ]
+
+        # Add domain-specific requirements
+        domain_reqs = {
+            "api": [
+                "- Design clean REST endpoints",
+                "- Include request/response schemas",
+                "- Add input validation",
+            ],
+            "database": [
+                "- Design normalized schema",
+                "- Include migration scripts",
+                "- Add connection pooling",
+            ],
+            "frontend": [
+                "- Use semantic HTML5 elements",
+                "- Include accessible markup (ARIA, alt text)",
+                "- Style with CSS Grid/Flexbox",
+            ],
+            "auth": [
+                "- Use parameterized queries for all SQL",
+                "- Implement proper error handling",
+                "- Write unit tests with assertions",
+            ],
+            "general": [
+                "- Use parameterized queries for all SQL",
+                "- Implement proper error handling",
+                "- Write unit tests with assertions",
+            ],
+        }
+        if domain in domain_reqs:
+            lines.append("## Domain-specific Requirements")
+            lines.extend(domain_reqs[domain])
+
+        lines.append("")
+        lines.append(f"## Number of tasks: {len(items)}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def _generate_finding_id(self, index: int, domain: str) -> str:
+        """Generate a unique ID for a finding."""
+        return f"task-{domain[0]}-{index+1}"
+
+    def generate(
+        self,
+        goal_text: str,
+        max_tasks: int = 5,
+    ) -> "ParseResult":
+        """
+        Core parsing method. Returns a ParseResult with findings and template.
+        """
+        items = self._extract_action_items(goal_text, max_tasks)
+        domain = self._detect_domain(goal_text)
+        priority = self._detect_priority(goal_text)
+        template = self._generate_template(domain, items)
+
+        # Build findings
+        findings = []
+        seen = set()
+        found_id = 0
+        for item in items:
+            # Clean up: if item starts with a number, keep it; strip leading delimiters
+            clean = item.strip()
+            while clean and clean[0] in ['-', '•', '*', '>', '|']:
+                clean = clean[1:].lstrip()
+
+            if not clean or len(clean) < 5:
+                continue
+
+            # Deduplicate
+            if clean in seen:
+                continue
+            seen.add(clean)
+
+            fid = self._generate_finding_id(found_id, domain)
+            finding = Finding(
+                id=fid,
+                text=clean,
+                status=Status.PENDING,
+                score=priority,
+                detail=f"auto-generated from: {goal_text[:80]}...",
+            )
+            findings.append(finding)
+            found_id += 1
+
+
+        return ParseResult(
+            findings=findings,
+            template=template,
+            domain=domain,
+            priority=priority,
+            task_count=len(findings),
+        )
+
+    def parse(
+        self,
+        memory: Optional[Memory] = None,
+        goal_text: Optional[str] = None,
+        max_tasks: int = 5,
+    ) -> Tuple[List[Finding], str]:
+        """
+        Public interface: accepts (memory, goal_text) or standalone goal_text.
+        If memory is provided, saves the auto-generated findings to inbox.
+
+        Usage:
+            # Standalone: get findings + template
+            findings, template = planner.parse(goal_text="Build a REST API...")
+
+            # With memory: auto-saves findings before returning
+            findings, template = planner.parse(
+                memory,
+                goal_text="Build a REST API...",
+                max_tasks=5,
+            )
+            # → findings now in memory as PENDING items
+        """
+        # Support old-style (memory, goal_text) for backward compat
+        if memory is not None and isinstance(memory, str):
+            goal_text = memory
+            memory = None
+
+        result = self.generate(goal_text, max_tasks)
+
+        if memory is not None:
+            for finding in result.findings:
+                memory.save_finding(finding)
+
+        return result.findings, result.template
+
+
+# -------------- ParseResult (named tuple for return values) ----- ----- -----
+
+
+@dataclass
+class ParseResult:
+    """Return type for TaskPlannerAgent.parse / generate."""
+    findings: List[Finding]
+    template: str
+    domain: str
+    priority: int
+    task_count: int
+
+
 # -------------- Orchestrator --------------
 
 
@@ -640,7 +931,7 @@ class LoopOrchestrator:
 
 def main():
     """CLI demo."""
-    parser = argparse.ArgumentParser(description="Loop Engineering V4 Framework")
+    parser = argparse.ArgumentParser(description="Loop Engineering Framework")
     parser.add_argument("--run", "-r", type=int, default=1, help="Number of turns to run")
     parser.add_argument("--worktrees", default=DEFAULT_WORKTREES)
     parser.add_argument("--state", default=DEFAULT_STATE_DIR)

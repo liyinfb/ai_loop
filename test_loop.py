@@ -29,6 +29,7 @@ from loop import (
     Finding, Status, Memory, GeneratorAgent, EvaluatorAgent,
     BudgetGate, LoopOrchestrator, Connector, GitHubConnector,
     DEFAULT_STATE_DIR, DEFAULT_WORKTREES, DEFAULT_INBOX,
+    TaskPlannerAgent, ParseResult,
 )
 
 
@@ -305,11 +306,65 @@ def test_orchestrator_full_roundtrip():
     print("  [PASS] test_orchestrator_full_roundtrip")
 
 
+
+
+# -------------- TaskPlannerAgent Tests ----- -----
+
+# 25. TaskPlannerAgent — generate returns ParseResult
+def test_planner_generate_returns_result():
+    planner = TaskPlannerAgent()
+    result = planner.generate("Build a REST API", max_tasks=3)
+    assert isinstance(result, ParseResult)
+    assert len(result.findings) > 0
+    assert "task-" in result.findings[0].id
+    print("  [PASS] test_planner_generate_returns_result")
+
+
+# 26. TaskPlannerAgent — max_tasks limits findings count
+def test_planner_max_tasks_limit():
+    planner = TaskPlannerAgent()
+    text = "Create user registration, Implement login feature, Deploy to AWS, Test API endpoints, Update documentation"
+    result = planner.generate(text, max_tasks=3)
+    assert len(result.findings) <= 3
+
+
+# 27. TaskPlannerAgent — parse with memory saves findings
+def test_planner_parse_with_memory():
+    mem = _make_memory()
+    planner = TaskPlannerAgent()
+    findings, template = planner.parse(
+        memory=mem,
+        goal_text="Add unit tests and deploy to AWS",
+        max_tasks=2,
+    )
+    assert len(findings) >= 1
+    pending = mem.load_findings()
+    assert len(pending) >= 1
+    for f in pending:
+        assert f.status == Status.PENDING
+    print("  [PASS] test_planner_parse_with_memory")
+
+
+# 28. TaskPlannerAgent — parse standalone returns tuple
+def test_planner_parse_standalone():
+    planner = TaskPlannerAgent()
+    findings, template = planner.parse(
+        goal_text="Build a REST API with Flask and SQLite"
+    )
+    assert isinstance(findings, list)
+    assert isinstance(template, str)
+    assert len(findings) > 0
+    assert "task-" in findings[0].id
+    result = planner.generate("Build a REST API with Flask and SQLite")
+    assert result.domain == "api"
+    print("  [PASS] test_planner_parse_standalone")
+
+
 # -------------- Runner ----- -----
 
 
 def run_all_tests():
-    """Run all 24 tests."""
+    """Run all 28 tests."""
     tests = [
         test_finding_to_dict,
         test_finding_round_trip,
@@ -335,6 +390,10 @@ def run_all_tests():
         test_budget_gate_pre_discovery,
         test_orchestrator_no_findings,
         test_orchestrator_full_roundtrip,
+        test_planner_generate_returns_result,
+        test_planner_max_tasks_limit,
+        test_planner_parse_with_memory,
+        test_planner_parse_standalone,
     ]
     passed = 0
     failed = 0

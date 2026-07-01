@@ -59,6 +59,42 @@ python -m loop --run 3 --budget 50:2:200  # Set budget gates (per_run:per_turn:d
 python -m loop --run 3 --worktrees /tmp/loop-wtrees --state /tmp/loop-state
 ```
 
+### Natural language input
+
+Give `TaskPlannerAgent` a plain-English goal — it auto-generates findings + template:
+
+```python
+from loop import (
+    LoopOrchestrator, Memory, GeneratorAgent,
+    EvaluatorAgent, BudgetGate, TaskPlannerAgent,
+)
+
+planner = TaskPlannerAgent()
+
+# Pass a natural-language goal
+findings, template = planner.parse(
+    goal_text="Add a REST API for user management with Flask.\n"
+              "Need login, registration, and database models."
+)
+# → findings auto-generated (e.g. [task-a-1: Add login endpoint, ...])
+# → template filled with domain-specific requirements for "api"
+
+memory = Memory()
+for f in findings:
+    memory.save_finding(f)
+
+generator = GeneratorAgent()
+evaluator = EvaluatorAgent()
+evaluator.add_rule("has_heading", lambda f, d, w: {"passed": "# " in d, "detail": "ok"})
+budget = BudgetGate(per_run=10.0, per_turn=0.5, daily=100.0)
+
+orchestrator = LoopOrchestrator(memory, generator, evaluator, budget)
+
+for _ in range(5):
+    if not orchestrator.run_turn(template):
+        break
+```
+
 ## Architecture
 
 ### `Finding` — the unit of work
@@ -155,7 +191,7 @@ worktree = generator.create_worktree("fix-login")  # → ~/hermes/loop/worktrees
 draft = generator.generate(finding, "Your template text.")  # produces Markdown
 ```
 
-**Goal stop condition** (V4 feature):
+**Goal stop condition**:
 
 ```python
 generator.goal = {
